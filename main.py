@@ -1,176 +1,118 @@
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.utils import class_weight
+from sklearn.preprocessing import StandardScaler
+from scipy.stats import chi2_contingency
 
-# ---------------------------
-# Load Alzheimer's clinical dataset
-# ---------------------------
-alzheimers_data = pd.read_csv("C:\\Users\\Victus\\OneDrive\\Desktop\\alzheimers_disease_data.csv")
-alzheimers_data = alzheimers_data.dropna(subset=['PatientID', 'Age', 'Diagnosis'])
+# Load the datasets
+alzheimers_data = pd.read_csv('C:\\Users\\Victus\\OneDrive\\Desktop\\alzheimers_disease_data.csv')
+genome_data = pd.read_csv('C:\\Users\\Victus\\OneDrive\\Desktop\\1000-genomes-phase-3_reports_1000_Genomes_phase_3_sample_results.csv')
 
-# Normalize clinical features
+# 1. Data Cleaning
+# Check for missing values and remove rows with missing data
+print("Missing values in Alzheimer's data:\n", alzheimers_data.isnull().sum())
+print("Missing values in Genome data:\n", genome_data.isnull().sum())
+
+alzheimers_data.dropna(inplace=True)
+genome_data.dropna(inplace=True)
+
+# Validate data labels
+assert alzheimers_data['Diagnosis'].isin([0, 1]).all(), "Diagnosis column contains invalid labels"
+
+# 2. Feature Calculation
+# Example: Platelet-to-Lymphocyte Ratio (replace 'Platelets' and 'Lymphocytes' with actual column names if available)
+if 'Platelets' in alzheimers_data.columns and 'Lymphocytes' in alzheimers_data.columns:
+    alzheimers_data['PLR'] = alzheimers_data['Platelets'] / alzheimers_data['Lymphocytes']
+
+# Normalize selected features
+features = ['Age', 'BMI', 'SystolicBP', 'DiastolicBP']
 scaler = StandardScaler()
-clinical_features = ['Age', 'BMI', 'SystolicBP', 'DiastolicBP']
-alzheimers_data[clinical_features] = scaler.fit_transform(alzheimers_data[clinical_features])
+alzheimers_data[features] = scaler.fit_transform(alzheimers_data[features])
 
-# APOE Genotype Distribution
-apoe_genotypes = ['e2/e2', 'e2/e3', 'e2/e4', 'e3/e3', 'e3/e4', 'e4/e4']
-genotype_probabilities = [0.01, 0.13, 0.03, 0.60, 0.20, 0.03]
-np.random.seed(42)
-alzheimers_data['APOE_genotype'] = np.random.choice(apoe_genotypes, size=len(alzheimers_data), p=genotype_probabilities)
+# 3. Exploratory Data Analysis
+# Histograms of each parameter
+for feature in features:
+    plt.figure()
+    sns.histplot(alzheimers_data[feature], kde=True)
+    plt.title(f'Distribution of {feature}')
+    plt.show()
 
-# Map APOE genotypes to risk scores
-apoe_risk_mapping = {'e2/e2': 0, 'e2/e3': 0, 'e3/e3': 1, 'e2/e4': 1, 'e3/e4': 1, 'e4/e4': 2}
-alzheimers_data['APOE_risk_score'] = alzheimers_data['APOE_genotype'].map(apoe_risk_mapping)
+# Box plot for each feature to identify outliers
+plt.figure(figsize=(10, 6))
+sns.boxplot(data=alzheimers_data[features])
+plt.title('Box Plot of Features')
+plt.show()
 
-# ---------------------------
-# Genome Data Analysis with SDps
-# ---------------------------
-genomes_data = pd.read_csv("C:\\Users\\Victus\\OneDrive\\Desktop\\1000-genomes-phase-3_reports_1000_Genomes_phase_3_sample_results.csv")
-relevant_genome_columns = ['name', 'heterozygous_variant_count', 'perct_hom_alt_in_snvs']
-genomes_data_filtered = genomes_data[relevant_genome_columns].dropna()
+# Correlation matrix
+plt.figure(figsize=(8, 6))
+sns.heatmap(alzheimers_data[features + ['Diagnosis']].corr(), annot=True, cmap="coolwarm")
+plt.title('Correlation Matrix')
+plt.show()
 
-# Calculate SDps and PRS based on SDps
-genomes_data_filtered['SDps_het_var_count'] = genomes_data_filtered['heterozygous_variant_count'].std()
-genomes_data_filtered['SDps_hom_alt_in_snvs'] = genomes_data_filtered['perct_hom_alt_in_snvs'].std()
+# Adjusted Scatter Plots for Diagnosis vs Features
+feature_pairs = [('DiastolicBP', 'Diagnosis'), ('SystolicBP', 'Diagnosis'), ('BMI', 'Diagnosis'), ('Age', 'Diagnosis')]
+for feature, target in feature_pairs:
+    plt.figure()
+    sns.regplot(x=alzheimers_data[feature], y=alzheimers_data[target], logistic=True, scatter_kws={"s": 10})
+    plt.title(f'{feature} vs {target}')
+    plt.show()
 
-genomes_data_filtered['PRS_SDps'] = genomes_data_filtered.apply(
-    lambda row: row['heterozygous_variant_count'] * row['SDps_het_var_count'] + row['perct_hom_alt_in_snvs'] * row['SDps_hom_alt_in_snvs'],
-    axis=1
-)
+# 4. Identifying Homozygous Alternate Variants
+# Identify rows in genome data with homozygous alternate variants
+if 'heterozygous_variant_count' in genome_data.columns:
+    homozygous_variants = genome_data[genome_data['heterozygous_variant_count'] == 0]
 
-# Define risk category based on PRS threshold
-risk_threshold_genome_sdps = genomes_data_filtered['PRS_SDps'].median()
-genomes_data_filtered['RiskCategory_SDps'] = genomes_data_filtered['PRS_SDps'].apply(lambda x: 1 if x > risk_threshold_genome_sdps else 0)
+# 5. Identifying Biomarkers and Therapeutic Targets
+# Association Test: Chi-square test to identify significant association with Diagnosis
+significant_variants = []
+for column in genome_data.select_dtypes(include=['int', 'float']).columns:
+    contingency_table = pd.crosstab(alzheimers_data['Diagnosis'], genome_data[column])
+    chi2, p, dof, expected = chi2_contingency(contingency_table)
+    if p < 0.05:  # significant if p < 0.05
+        significant_variants.append(column)
 
-# Add SDps risk to Alzheimer's data
-alzheimers_data['SDps_risk'] = genomes_data_filtered['RiskCategory_SDps'][:len(alzheimers_data)].values
+print("Significant Variants associated with Alzheimer's Disease:", significant_variants)
 
-# ---------------------------
-# Random Forest Model on Clinical Data
-# ---------------------------
-X_clinical = alzheimers_data[clinical_features]
-y_clinical = alzheimers_data['Diagnosis'].apply(lambda x: 1 if x == 'Alzheimers' else 0)
+# 6. Model Training and Evaluation
+# Extract features and target for model
+X = alzheimers_data[features]
+y = alzheimers_data['Diagnosis']
 
-X_train_clinical, X_test_clinical, y_train_clinical, y_test_clinical = train_test_split(X_clinical, y_clinical, test_size=0.2, random_state=42)
-
-class_weights_clinical = class_weight.compute_class_weight('balanced', classes=np.unique(y_train_clinical), y= y_train_clinical)
-class_weights_dict_clinical = {i: class_weights_clinical[i] for i in range(len(class_weights_clinical))}
-
-rf_clinical = RandomForestClassifier(n_estimators=100, random_state=42, class_weight=class_weights_dict_clinical)
-rf_clinical.fit(X_train_clinical, y_train_clinical)
-
-y_pred_clinical = rf_clinical.predict(X_test_clinical)
-accuracy_clinical = accuracy_score(y_test_clinical, y_pred_clinical)
-print(f"Random Forest Accuracy on Clinical Data: {accuracy_clinical * 100:.2f}%")
-
-# ---------------------------
-# Logistic Regression Model combining APOE risk and SDps
-# ---------------------------
-combined_df = pd.DataFrame({
-    'APOE_risk_score': alzheimers_data['APOE_risk_score'],
-    'SDps_risk': genomes_data_filtered['RiskCategory_SDps'][:len(alzheimers_data)]  # Ensure same length
-})
-
-X = combined_df[['APOE_risk_score']]
-y = combined_df['SDps_risk']
-
+# Train-test split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+# Initialize and train logistic regression model
 logistic_model = LogisticRegression()
 logistic_model.fit(X_train, y_train)
 
+# Predict probabilities for each individual
+alzheimers_data['Alzheimers_Probability'] = logistic_model.predict_proba(X)[:, 1]
+alzheimers_data['Alzheimers_Probability_Percentage'] = alzheimers_data['Alzheimers_Probability'] * 100
+
+# Display each individual's Alzheimer’s Probability
+print(alzheimers_data[['PatientID', 'Alzheimers_Probability_Percentage']])
+
+# Predict on the test set and evaluate accuracy
 y_pred = logistic_model.predict(X_test)
 accuracy = accuracy_score(y_test, y_pred)
-print(f'Logistic Regression Model Accuracy: {accuracy * 100:.2f}%')
+print(f"Model Accuracy: {accuracy}")
 
-# Graphs
-plt.figure(figsize=(8, 5))
-sns.countplot(x='APOE_genotype', data=alzheimers_data, palette='viridis')
-plt.title('Distribution of APOE Genotypes')
-plt.xlabel('APOE Genotype')
-plt.ylabel('Count')
+# Additional Exploratory Visualizations
+# Distribution of Alzheimer's Probability
+plt.figure()
+sns.histplot(alzheimers_data['Alzheimers_Probability_Percentage'], kde=True, color='purple')
+plt.title("Distribution of Alzheimer's Probability Percentage")
+plt.xlabel("Alzheimer's Probability (%)")
 plt.show()
 
-plt.figure(figsize=(8, 5))
-sns.countplot(x='APOE_risk_score', hue='SDps_risk', data=alzheimers_data, palette='magma')
-plt.title('APOE Risk Score vs SDps Risk Category')
-plt.xlabel('APOE Risk Score')
-plt.ylabel('Count')
-plt.legend(title='SDps Risk Category', loc='upper right')
+# Violin plot for Probability by Diagnosis
+plt.figure()
+sns.violinplot(x=alzheimers_data['Diagnosis'], y=alzheimers_data['Alzheimers_Probability_Percentage'])
+plt.title("Alzheimer's Probability by Diagnosis")
+plt.xlabel("Diagnosis")
+plt.ylabel("Alzheimer's Probability (%)")
 plt.show()
-
-plt.figure(figsize=(10, 6))
-correlation_matrix = alzheimers_data[clinical_features + ['APOE_risk_score']].corr()
-sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm')
-plt.title('Correlation Matrix of Clinical Features')
-plt.show()
-
-plt.figure(figsize=(10, 6))
-genomes_data_filtered['APOE_genotype'] = alzheimers_data['APOE_genotype'][:len(genomes_data_filtered)]
-sns.boxplot(x='APOE_genotype', y='PRS_SDps', data=genomes_data_filtered, palette='Set2')
-plt.title('Polygenic Risk Score (PRS) Distribution by APOE Genotype')
-plt.xlabel('APOE Genotype')
-plt.ylabel('PRS (using SDps)')
-plt.xticks(rotation=45)
-plt.show()
-
-plt.figure(figsize=(10, 6))
-plt.hist(genomes_data_filtered['PRS_SDps'], bins=30, color='skyblue', edgecolor='black')
-plt.title('Polygenic Risk Score (PRS) Distribution using SDps')
-plt.xlabel('PRS (using SDps)')
-plt.ylabel('Frequency')
-plt.show()
-
-# Create a combined DataFrame for the scatter plot
-scatter_df = pd.DataFrame({
-    'APOE_risk_score': alzheimers_data['APOE_risk_score'],
-    'PRS_SDps': genomes_data_filtered['PRS_SDps'][:len(alzheimers_data)],
-    'APOE_genotype': alzheimers_data['APOE_genotype']
-})
-
-plt.figure(figsize=(8, 6))
-sns.scatterplot(x='APOE_risk_score', y='PRS_SDps', data=scatter_df, hue='APOE_genotype', palette='viridis')
-plt.xlabel('APOE Risk Score')
-plt.ylabel('PRS (using SDps)')
-plt.title('Scatter Plot of APOE Risk Score vs PRS (using SDps)')
-plt.legend(title='APOE Genotype', loc='upper right')
-plt.show()
-
-# Additional Graphs
-if 'APOE_risk_score' in genomes_data_filtered.columns:
-    plt.figure(figsize=(8, 6))
-    sns.histplot(genomes_data_filtered['APOE_risk_score'], bins=20, kde=True, color='blue')
-    plt.xlabel('APOE Risk Score')
-    plt.ylabel('Frequency')
-    plt.title('Distribution of APOE Risk Scores')
-    plt.show()
-else:
-    print("Column 'APOE_risk_score' is missing in genomes_data_filtered.")
-
-if 'PRS_SDps' in genomes_data_filtered.columns and 'APOE_genotype' in genomes_data_filtered.columns:
-    plt.figure(figsize=(8, 6))
-    sns.violinplot(x='APOE_genotype', y='PRS_SDps', data=genomes_data_filtered, palette='Set2')
-    plt.xlabel('APOE Genotype')
-    plt.ylabel('PRS (using SDps)')
-    plt.title('Violin Plot of PRS (using SDps) by APOE Genotype')
-    plt.show()
-else:
-    print("One or both of the columns 'PRS_SDps' and 'APOE_genotype' are missing in genomes_data_filtered.")
-
-if 'APOE_risk_score' in genomes_data_filtered.columns and 'APOE_genotype' in genomes_data_filtered.columns:
-    plt.figure(figsize=(8, 6))
-    sns.boxplot(x='APOE_genotype', y='APOE_risk_score', data=genomes_data_filtered, palette='Pastel1')
-    plt.xlabel('APOE Genotype')
-    plt.ylabel('APOE Risk Score')
-    plt.title('Box Plot of APOE Risk Scores by APOE Genotype')
-    plt.show()
-else:
-    print("One or both of the columns 'APOE_risk_score' and 'APOE_genotype' are missing in genomes_data_filtered.")
