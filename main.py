@@ -141,7 +141,7 @@ fig_roc.update_layout(title=f"ROC Curve (AUC = {roc_auc:.2f})", xaxis_title="Fal
 st.plotly_chart(fig_roc)
 
 # Confusion Matrix
-st.subheader("Confusion Matrix")
+st.subheader()"Confusion Matrix")
 cm = confusion_matrix(y_test, y_pred)
 fig_cm = plt.figure(figsize=(6, 6))
 sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=['No', 'Yes'], yticklabels=['No', 'Yes'], cbar=False)
@@ -149,4 +149,3 @@ plt.title("Confusion Matrix")
 plt.xlabel("Predicted")
 plt.ylabel("Actual")
 st.pyplot(fig_cm)
-
